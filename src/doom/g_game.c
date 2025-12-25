@@ -1025,25 +1025,29 @@ void G_Ticker (void)
 		{ 
 		  case BTS_PAUSE: 
 		    paused ^= 1; 
-		    if (paused) 
-			S_PauseSound (); 
+		    if (paused)
+                S_PauseSound ();
 		    else 
-			S_ResumeSound (); 
+                S_ResumeSound ();
 		    break; 
 					 
 		  case BTS_SAVEGAME: 
-		    if (!savedescription[0]) 
+		    if (!savedescription[0])
                     {
                         M_StringCopy(savedescription, "NET GAME",
                                      sizeof(savedescription));
                     }
 
-		    savegameslot =  
-			(players[i].cmd.buttons & BTS_SAVEMASK)>>BTS_SAVESHIFT; 
-		    gameaction = ga_savegame; 
-		    break; 
+		    savegameslot =
+			(players[i].cmd.buttons & BTS_SAVEMASK)>>BTS_SAVESHIFT;
+		    gameaction = ga_savegame;
+		    break;
 		} 
-	    } 
+	    }
+	    if (players[i].cmd.buttons & BT_USE && paused) // trigger slow render loop by pressing use key
+        {
+            R_RenderPlayerViewSlow (&players[displayplayer]);
+        }
 	}
     }
 

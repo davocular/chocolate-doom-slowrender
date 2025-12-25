@@ -977,6 +977,357 @@ void R_DrawMasked (void)
     if (!viewangleoffset)		
 	R_DrawPlayerSprites ();
 }
+// new
+void R_DrawMaskedColumnSlow (column_t* column)
+{
+    int		topscreen;
+    int 	bottomscreen;
+    fixed_t	basetexturemid;
+
+    basetexturemid = dc_texturemid;
+
+    for ( ; column->topdelta != 0xff ; )
+    {
+        // calculate unclipped screen coordinates
+        //  for post
+        topscreen = sprtopscreen + spryscale*column->topdelta;
+        bottomscreen = topscreen + spryscale*column->length;
+
+        dc_yl = (topscreen+FRACUNIT-1)>>FRACBITS;
+        dc_yh = (bottomscreen-1)>>FRACBITS;
+
+        if (dc_yh >= mfloorclip[dc_x])
+            dc_yh = mfloorclip[dc_x]-1;
+        if (dc_yl <= mceilingclip[dc_x])
+            dc_yl = mceilingclip[dc_x]+1;
+
+        if (dc_yl <= dc_yh)
+        {
+            dc_source = (byte *)column + 3;
+            dc_texturemid = basetexturemid - (column->topdelta<<FRACBITS);
+            // dc_source = (byte *)column + 3 - column->topdelta;
+
+            // Drawn by either R_DrawColumn
+            //  or (SHADOW) R_DrawFuzzColumn.
+            colfunc ();
+            I_FinishUpdate();
+        }
+        column = (column_t *)(  (byte *)column + column->length + 4);
+    }
+
+    dc_texturemid = basetexturemid;
+}
+
+void
+R_DrawVisSpriteSlow
+( vissprite_t*		vis,
+  int			x1,
+  int			x2 )
+{
+    column_t*		column;
+    int			texturecolumn;
+    fixed_t		frac;
+    patch_t*		patch;
 
 
+    patch = W_CacheLumpNum (vis->patch+firstspritelump, PU_CACHE);
+
+    dc_colormap = vis->colormap;
+
+    if (!dc_colormap)
+    {
+        // NULL colormap = shadow draw
+        colfunc = fuzzcolfunc;
+    }
+    else if (vis->mobjflags & MF_TRANSLATION)
+    {
+        colfunc = transcolfunc;
+        dc_translation = translationtables - 256 +
+        ( (vis->mobjflags & MF_TRANSLATION) >> (MF_TRANSSHIFT-8) );
+    }
+
+    dc_iscale = abs(vis->xiscale)>>detailshift;
+    dc_texturemid = vis->texturemid;
+    frac = vis->startfrac;
+    spryscale = vis->scale;
+    sprtopscreen = centeryfrac - FixedMul(dc_texturemid,spryscale);
+
+    for (dc_x=vis->x1 ; dc_x<=vis->x2 ; dc_x++, frac += vis->xiscale)
+    {
+        texturecolumn = frac>>FRACBITS;
+        #ifdef RANGECHECK
+        if (texturecolumn < 0 || texturecolumn >= SHORT(patch->width))
+            I_Error ("R_DrawSpriteRange: bad texturecolumn");
+        #endif
+        column = (column_t *) ((byte *)patch +
+        LONG(patch->columnofs[texturecolumn]));
+        R_DrawMaskedColumnSlow (column);
+    }
+
+    colfunc = basecolfunc;
+}
+void R_DrawSpriteSlow (vissprite_t* spr)
+{
+    drawseg_t*		ds;
+    short		clipbot[SCREENWIDTH];
+    short		cliptop[SCREENWIDTH];
+    int			x;
+    int			r1;
+    int			r2;
+    fixed_t		scale;
+    fixed_t		lowscale;
+    int			silhouette;
+
+    for (x = spr->x1 ; x<=spr->x2 ; x++)
+        clipbot[x] = cliptop[x] = -2;
+
+    // Scan drawsegs from end to start for obscuring segs.
+    // The first drawseg that has a greater scale
+    //  is the clip seg.
+    for (ds=ds_p-1 ; ds >= drawsegs ; ds--)
+    {
+        // determine if the drawseg obscures the sprite
+        if (ds->x1 > spr->x2
+            || ds->x2 < spr->x1
+            || (!ds->silhouette
+            && !ds->maskedtexturecol) )
+        {
+            // does not cover sprite
+            continue;
+        }
+
+        r1 = ds->x1 < spr->x1 ? spr->x1 : ds->x1;
+        r2 = ds->x2 > spr->x2 ? spr->x2 : ds->x2;
+
+        if (ds->scale1 > ds->scale2)
+        {
+            lowscale = ds->scale2;
+            scale = ds->scale1;
+        }
+        else
+        {
+            lowscale = ds->scale1;
+            scale = ds->scale2;
+        }
+
+        if (scale < spr->scale
+            || ( lowscale < spr->scale
+            && !R_PointOnSegSide (spr->gx, spr->gy, ds->curline) ) )
+        {
+            // masked mid texture?
+            if (ds->maskedtexturecol)
+                R_RenderMaskedSegRangeSlow (ds, r1, r2);
+            // seg is behind sprite
+            continue;
+        }
+
+
+        // clip this piece of the sprite
+        silhouette = ds->silhouette;
+
+        if (spr->gz >= ds->bsilheight)
+            silhouette &= ~SIL_BOTTOM;
+
+        if (spr->gzt <= ds->tsilheight)
+            silhouette &= ~SIL_TOP;
+
+        if (silhouette == 1)
+        {
+            // bottom sil
+            for (x=r1 ; x<=r2 ; x++)
+                if (clipbot[x] == -2)
+                    clipbot[x] = ds->sprbottomclip[x];
+        }
+        else if (silhouette == 2)
+        {
+            // top sil
+            for (x=r1 ; x<=r2 ; x++)
+                if (cliptop[x] == -2)
+                    cliptop[x] = ds->sprtopclip[x];
+        }
+        else if (silhouette == 3)
+        {
+            // both
+            for (x=r1 ; x<=r2 ; x++)
+            {
+                if (clipbot[x] == -2)
+                    clipbot[x] = ds->sprbottomclip[x];
+                if (cliptop[x] == -2)
+                    cliptop[x] = ds->sprtopclip[x];
+            }
+        }
+
+    }
+
+    // all clipping has been performed, so draw the sprite
+
+    // check for unclipped columns
+    for (x = spr->x1 ; x<=spr->x2 ; x++)
+    {
+        if (clipbot[x] == -2)
+            clipbot[x] = viewheight;
+
+        if (cliptop[x] == -2)
+            cliptop[x] = -1;
+    }
+
+    mfloorclip = clipbot;
+    mceilingclip = cliptop;
+    R_DrawVisSpriteSlow (spr, spr->x1, spr->x2);
+}
+void R_DrawPSpriteSlow (pspdef_t* psp)
+{
+    fixed_t		tx;
+    int			x1;
+    int			x2;
+    spritedef_t*	sprdef;
+    spriteframe_t*	sprframe;
+    int			lump;
+    boolean		flip;
+    vissprite_t*	vis;
+    vissprite_t		avis;
+
+    // decide which patch to use
+    #ifdef RANGECHECK
+    if ( (unsigned)psp->state->sprite >= (unsigned int) numsprites)
+        I_Error ("R_ProjectSprite: invalid sprite number %i ",
+                 psp->state->sprite);
+        #endif
+        sprdef = &sprites[psp->state->sprite];
+    #ifdef RANGECHECK
+    if ( (psp->state->frame & FF_FRAMEMASK)  >= sprdef->numframes)
+        I_Error ("R_ProjectSprite: invalid sprite frame %i : %i ",
+                 psp->state->sprite, psp->state->frame);
+        #endif
+        sprframe = &sprdef->spriteframes[ psp->state->frame & FF_FRAMEMASK ];
+
+    lump = sprframe->lump[0];
+    flip = (boolean)sprframe->flip[0];
+
+    // calculate edges of the shape
+    tx = psp->sx-(SCREENWIDTH/2)*FRACUNIT;
+
+    tx -= spriteoffset[lump];
+    x1 = (centerxfrac + FixedMul (tx,pspritescale) ) >>FRACBITS;
+
+    // off the right side
+    if (x1 > viewwidth)
+        return;
+
+    tx +=  spritewidth[lump];
+    x2 = ((centerxfrac + FixedMul (tx, pspritescale) ) >>FRACBITS) - 1;
+
+    // off the left side
+    if (x2 < 0)
+        return;
+
+    // store information in a vissprite
+    vis = &avis;
+    vis->mobjflags = 0;
+    vis->texturemid = (BASEYCENTER<<FRACBITS)+FRACUNIT/2-(psp->sy-spritetopoffset[lump]);
+    vis->x1 = x1 < 0 ? 0 : x1;
+    vis->x2 = x2 >= viewwidth ? viewwidth-1 : x2;
+    vis->scale = pspritescale<<detailshift;
+
+    if (flip)
+    {
+        vis->xiscale = -pspriteiscale;
+        vis->startfrac = spritewidth[lump]-1;
+    }
+    else
+    {
+        vis->xiscale = pspriteiscale;
+        vis->startfrac = 0;
+    }
+
+    if (vis->x1 > x1)
+        vis->startfrac += vis->xiscale*(vis->x1-x1);
+
+    vis->patch = lump;
+
+    if (viewplayer->powers[pw_invisibility] > 4*32
+        || viewplayer->powers[pw_invisibility] & 8)
+    {
+        // shadow draw
+        vis->colormap = NULL;
+    }
+    else if (fixedcolormap)
+    {
+        // fixed color
+        vis->colormap = fixedcolormap;
+    }
+    else if (psp->state->frame & FF_FULLBRIGHT)
+    {
+        // full bright
+        vis->colormap = colormaps;
+    }
+    else
+    {
+        // local light
+        vis->colormap = spritelights[MAXLIGHTSCALE-1];
+    }
+
+    R_DrawVisSpriteSlow (vis, vis->x1, vis->x2);
+}
+
+void R_DrawPlayerSpritesSlow (void)
+{
+    int		i;
+    int		lightnum;
+    pspdef_t*	psp;
+
+    // get light level
+    lightnum =
+    (viewplayer->mo->subsector->sector->lightlevel >> LIGHTSEGSHIFT)
+    +extralight;
+
+    if (lightnum < 0)
+        spritelights = scalelight[0];
+    else if (lightnum >= LIGHTLEVELS)
+        spritelights = scalelight[LIGHTLEVELS-1];
+    else
+        spritelights = scalelight[lightnum];
+
+    // clip to screen bounds
+    mfloorclip = screenheightarray;
+    mceilingclip = negonearray;
+
+    // add all active psprites
+    for (i=0, psp=viewplayer->psprites;
+         i<NUMPSPRITES;
+    i++,psp++)
+         {
+             if (psp->state)
+                 R_DrawPSpriteSlow (psp);
+         }
+}
+void R_DrawMaskedSlow (void)
+{
+    vissprite_t*	spr;
+    drawseg_t*		ds;
+
+    R_SortVisSprites ();
+
+    if (vissprite_p > vissprites)
+    {
+        // draw all vissprites back to front
+        for (spr = vsprsortedhead.next ;
+             spr != &vsprsortedhead ;
+        spr=spr->next)
+             {
+
+                 R_DrawSpriteSlow (spr);
+             }
+    }
+
+    // render any remaining masked mid textures
+    for (ds=ds_p-1 ; ds >= drawsegs ; ds--)
+        if (ds->maskedtexturecol)
+            R_RenderMaskedSegRangeSlow (ds, ds->x1, ds->x2);
+
+    // draw the psprites on top of everything
+    //  but does not draw on side views
+    if (!viewangleoffset)
+        R_DrawPlayerSpritesSlow ();
+}
 

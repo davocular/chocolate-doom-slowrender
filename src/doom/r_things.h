@@ -44,6 +44,7 @@ extern fixed_t		pspriteiscale;
 
 
 void R_DrawMaskedColumn (column_t* column);
+void R_DrawMaskedColumnSlow (column_t* column);
 
 
 void R_SortVisSprites (void);
@@ -54,6 +55,7 @@ void R_DrawSprites (void);
 void R_InitSprites(const char **namelist);
 void R_ClearSprites (void);
 void R_DrawMasked (void);
+void R_DrawMaskedSlow (void);
 
 void
 R_ClipVisSprite

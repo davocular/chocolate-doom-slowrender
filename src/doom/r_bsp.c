@@ -18,7 +18,6 @@
 
 
 
-
 #include "doomdef.h"
 
 #include "m_bbox.h"
@@ -53,6 +52,10 @@ R_StoreWallRange
   int	stop );
 
 
+void
+R_StoreWallRangeSlow
+( int	start,
+  int	stop );
 
 
 //
@@ -580,4 +583,330 @@ void R_RenderBSPNode (int bspnum)
 	R_RenderBSPNode (bsp->children[side^1]);
 }
 
+// new
 
+void
+R_ClipSolidWallSegmentSlow
+( int			first,
+  int			last )
+{
+    cliprange_t*	next;
+    cliprange_t*	start;
+
+    // Find the first range that touches the range
+    //  (adjacent pixels are touching).
+    start = solidsegs;
+    while (start->last < first-1)
+        start++;
+
+    if (first < start->first)
+    {
+        if (last < start->first-1)
+        {
+            // Post is entirely visible (above start),
+            //  so insert a new clippost.
+            R_StoreWallRangeSlow (first, last);
+            next = newend;
+            newend++;
+
+            while (next != start)
+            {
+                *next = *(next-1);
+                next--;
+            }
+            next->first = first;
+            next->last = last;
+            return;
+        }
+
+        // There is a fragment above *start.
+        R_StoreWallRangeSlow (first, start->first - 1);
+        // Now adjust the clip size.
+        start->first = first;
+    }
+
+    // Bottom contained in start?
+    if (last <= start->last)
+        return;
+
+    next = start;
+    while (last >= (next+1)->first-1)
+    {
+        // There is a fragment between two posts.
+        R_StoreWallRangeSlow (next->last + 1, (next+1)->first - 1);
+        next++;
+
+        if (last <= next->last)
+        {
+            // Bottom is contained in next.
+            // Adjust the clip size.
+            start->last = next->last;
+            goto crunch;
+        }
+    }
+
+    // There is a fragment after *next.
+    R_StoreWallRangeSlow (next->last + 1, last);
+    // Adjust the clip size.
+    start->last = last;
+
+    // Remove start+1 to next from the clip list,
+    // because start now covers their area.
+    crunch:
+    if (next == start)
+    {
+        // Post just extended past the bottom of one post.
+        return;
+    }
+
+
+    while (next++ != newend)
+    {
+        // Remove a post.
+        *++start = *next;
+    }
+
+    newend = start+1;
+}
+
+void
+R_ClipPassWallSegmentSlow
+( int	first,
+  int	last )
+{
+    cliprange_t*	start;
+
+    // Find the first range that touches the range
+    //  (adjacent pixels are touching).
+    start = solidsegs;
+    while (start->last < first-1)
+        start++;
+
+    if (first < start->first)
+    {
+        if (last < start->first-1)
+        {
+            // Post is entirely visible (above start).
+            R_StoreWallRangeSlow (first, last);
+            return;
+        }
+
+        // There is a fragment above *start.
+        R_StoreWallRangeSlow (first, start->first - 1);
+    }
+
+    // Bottom contained in start?
+    if (last <= start->last)
+        return;
+
+    while (last >= (start+1)->first-1)
+    {
+        // There is a fragment between two posts.
+        R_StoreWallRangeSlow (start->last + 1, (start+1)->first - 1);
+        start++;
+
+        if (last <= start->last)
+            return;
+    }
+
+    // There is a fragment after *next.
+    R_StoreWallRangeSlow (start->last + 1, last);
+}
+
+void R_AddLineSlow (seg_t*	line)
+{
+    int			x1;
+    int			x2;
+    angle_t		angle1;
+    angle_t		angle2;
+    angle_t		span;
+    angle_t		tspan;
+
+    curline = line;
+
+    // OPTIMIZE: quickly reject orthogonal back sides.
+    angle1 = R_PointToAngle (line->v1->x, line->v1->y);
+    angle2 = R_PointToAngle (line->v2->x, line->v2->y);
+
+    // Clip to view edges.
+    // OPTIMIZE: make constant out of 2*clipangle (FIELDOFVIEW).
+    span = angle1 - angle2;
+
+    // Back side? I.e. backface culling?
+    if (span >= ANG180)
+        return;
+
+    // Global angle needed by segcalc.
+    rw_angle1 = angle1;
+    angle1 -= viewangle;
+    angle2 -= viewangle;
+
+    tspan = angle1 + clipangle;
+    if (tspan > 2*clipangle)
+    {
+        tspan -= 2*clipangle;
+
+        // Totally off the left edge?
+        if (tspan >= span)
+            return;
+
+        angle1 = clipangle;
+    }
+    tspan = clipangle - angle2;
+    if (tspan > 2*clipangle)
+    {
+        tspan -= 2*clipangle;
+
+        // Totally off the left edge?
+        if (tspan >= span)
+            return;
+        angle2 = -clipangle;
+    }
+
+    // The seg is in the view range,
+    // but not necessarily visible.
+    angle1 = (angle1+ANG90)>>ANGLETOFINESHIFT;
+    angle2 = (angle2+ANG90)>>ANGLETOFINESHIFT;
+    x1 = viewangletox[angle1];
+    x2 = viewangletox[angle2];
+
+    // Does not cross a pixel?
+    if (x1 == x2)
+        return;
+
+    backsector = line->backsector;
+
+    // Single sided line?
+    if (!backsector)
+        goto clipsolid;
+
+    // Closed door.
+    if (backsector->ceilingheight <= frontsector->floorheight
+        || backsector->floorheight >= frontsector->ceilingheight)
+        goto clipsolid;
+
+    // Window.
+    if (backsector->ceilingheight != frontsector->ceilingheight
+        || backsector->floorheight != frontsector->floorheight)
+        goto clippass;
+
+    // Reject empty lines used for triggers
+    //  and special events.
+    // Identical floor and ceiling on both sides,
+    // identical light levels on both sides,
+    // and no middle texture.
+    if (backsector->ceilingpic == frontsector->ceilingpic
+        && backsector->floorpic == frontsector->floorpic
+        && backsector->lightlevel == frontsector->lightlevel
+        && curline->sidedef->midtexture == 0)
+    {
+        return;
+    }
+
+
+    clippass:
+    R_ClipPassWallSegmentSlow (x1, x2-1);
+    return;
+
+    clipsolid:
+    R_ClipSolidWallSegmentSlow (x1, x2-1);
+}
+
+void R_SubsectorSlow (int num)
+{
+    int			count;
+    seg_t*		line;
+    subsector_t*	sub;
+
+    #ifdef RANGECHECK
+    if (num>=numsubsectors)
+        I_Error ("R_Subsector: ss %i with numss = %i",
+                 num,
+                 numsubsectors);
+        #endif
+
+        sscount++;
+    sub = &subsectors[num];
+    frontsector = sub->sector;
+    count = sub->numlines;
+    line = &segs[sub->firstline];
+
+    if (frontsector->floorheight < viewz)
+    {
+        floorplane = R_FindPlane (frontsector->floorheight,
+                                  frontsector->floorpic,
+                                  frontsector->lightlevel);
+    }
+    else
+        floorplane = NULL;
+
+    if (frontsector->ceilingheight > viewz
+        || frontsector->ceilingpic == skyflatnum)
+    {
+        ceilingplane = R_FindPlane (frontsector->ceilingheight,
+                                    frontsector->ceilingpic,
+                                    frontsector->lightlevel);
+    }
+    else
+        ceilingplane = NULL;
+
+    R_AddSprites (frontsector);
+
+    while (count--)
+    {
+        R_AddLineSlow (line);
+        line++;
+    }
+
+    // check for solidsegs overflow - extremely unsatisfactory!
+    if(newend > &solidsegs[32])
+        I_Error("R_Subsector: solidsegs overflow (vanilla may crash here)\n");
+}
+
+void R_RenderBSPNodeSlow (int bspnum)
+{
+    node_t*	bsp;
+    int		side;
+    char    store[64];
+
+    // Found a subsector?
+    if (bspnum & NF_SUBSECTOR)
+    {
+        sprintf(store, "Found subsector %d\n", bspnum ^ NF_SUBSECTOR);
+        printf(store);
+        if (bspnum == -1)
+            R_SubsectorSlow (0);
+        else
+            R_SubsectorSlow (bspnum&(~NF_SUBSECTOR));
+        return;
+    }
+
+    sprintf(store, "Traversing node %d\n", bspnum);
+    printf(store);
+
+    bsp = &nodes[bspnum];
+
+    // Decide which side the view point is on.
+    side = R_PointOnSide (viewx, viewy, bsp);
+
+    // Recursively divide front space.
+    R_RenderBSPNodeSlow (bsp->children[side]);
+
+    // Possibly divide back space.
+    if (R_CheckBBox (bsp->bbox[side^1]))
+    {
+        R_RenderBSPNodeSlow (bsp->children[side^1]);
+    }
+    else
+    {
+        if (bsp->children[side^1] & NF_SUBSECTOR)
+        {
+            sprintf(store, "Subsector %d is not visible, not drawing\n", (bsp->children[side^1] ^ NF_SUBSECTOR));
+        }
+        else
+        {
+            sprintf(store, "Node %d is not visible, not drawing\n", bsp->children[side^1]);
+        }
+        printf(store);
+    }
+}

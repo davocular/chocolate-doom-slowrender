@@ -29,6 +29,11 @@ R_RenderMaskedSegRange
 ( drawseg_t*	ds,
   int		x1,
   int		x2 );
+void
+R_RenderMaskedSegRangeSlow
+( drawseg_t*	ds,
+  int		x1,
+  int		x2 );
 
 
 #endif

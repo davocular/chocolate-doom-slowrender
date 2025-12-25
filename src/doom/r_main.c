@@ -888,3 +888,42 @@ void R_RenderPlayerView (player_t* player)
     // Check for new console commands.
     NetUpdate ();				
 }
+
+// new
+
+void R_ClearFB(int color)
+{
+    memset(I_VideoBuffer, color, SCREENWIDTH*SCREENHEIGHT*sizeof(*I_VideoBuffer));
+}
+
+void R_RenderPlayerViewSlow (player_t* player)
+{
+    R_ClearFB(0);
+    R_SetupFrame (player);
+
+    // Clear buffers.
+    R_ClearClipSegs ();
+    R_ClearDrawSegs ();
+    R_ClearPlanes ();
+    R_ClearSprites ();
+
+    // check for new console commands.
+    NetUpdate ();
+
+    // The head node is the last node output.
+    R_RenderBSPNodeSlow (numnodes-1);
+
+    // Check for new console commands.
+    NetUpdate ();
+
+    R_DrawPlanesSlow ();
+
+    // Check for new console commands.
+    NetUpdate ();
+
+    R_DrawMaskedSlow ();
+
+    // Check for new console commands.
+    NetUpdate ();
+    printf("Render loop finished\n");
+}

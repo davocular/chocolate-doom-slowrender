@@ -57,7 +57,16 @@ R_MakeSpans
   int		t2,
   int		b2 );
 
+void
+R_MakeSpansSlow
+( int		x,
+  int		t1,
+  int		b1,
+  int		t2,
+  int		b2 );
+
 void R_DrawPlanes (void);
+void R_DrawPlanesSlow (void);
 
 visplane_t*
 R_FindPlane

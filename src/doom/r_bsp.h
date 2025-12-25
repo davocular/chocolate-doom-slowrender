@@ -56,6 +56,7 @@ void R_ClearDrawSegs (void);
 
 
 void R_RenderBSPNode (int bspnum);
+void R_RenderBSPNodeSlow (int bspnum);
 
 
 #endif

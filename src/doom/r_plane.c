@@ -447,3 +447,124 @@ void R_DrawPlanes (void)
         W_ReleaseLumpNum(lumpnum);
     }
 }
+// new
+void
+R_MakeSpansSlow
+( int		x,
+  int		t1,
+  int		b1,
+  int		t2,
+  int		b2 )
+{
+    while (t1 < t2 && t1<=b1)
+    {
+        R_MapPlane (t1,spanstart[t1],x-1);
+        I_FinishUpdate();
+        t1++;
+    }
+    while (b1 > b2 && b1>=t1)
+    {
+        R_MapPlane (b1,spanstart[b1],x-1);
+        I_FinishUpdate();
+        b1--;
+    }
+
+    while (t2 < t1 && t2<=b2)
+    {
+        spanstart[t2] = x;
+        t2++;
+    }
+    while (b2 > b1 && b2>=t2)
+    {
+        spanstart[b2] = x;
+        b2--;
+    }
+}
+void R_DrawPlanesSlow (void)
+{
+    visplane_t*		pl;
+    int			light;
+    int			x;
+    int			stop;
+    int			angle;
+    int                 lumpnum;
+
+    #ifdef RANGECHECK
+    if (ds_p - drawsegs > MAXDRAWSEGS)
+        I_Error ("R_DrawPlanes: drawsegs overflow (%td)",
+                 ds_p - drawsegs);
+
+        if (lastvisplane - visplanes > MAXVISPLANES)
+            I_Error ("R_DrawPlanes: visplane overflow (%td)",
+                     lastvisplane - visplanes);
+
+            if (lastopening - openings > MAXOPENINGS)
+                I_Error ("R_DrawPlanes: opening overflow (%td)",
+                         lastopening - openings);
+                #endif
+
+                for (pl = visplanes ; pl < lastvisplane ; pl++)
+                {
+                    if (pl->minx > pl->maxx)
+                        continue;
+
+
+                    // sky flat
+                    if (pl->picnum == skyflatnum)
+                    {
+                        dc_iscale = pspriteiscale>>detailshift;
+
+                        // Sky is allways drawn full bright,
+                        //  i.e. colormaps[0] is used.
+                        // Because of this hack, sky is not affected
+                        //  by INVUL inverse mapping.
+                        dc_colormap = colormaps;
+                        dc_texturemid = skytexturemid;
+                        for (x=pl->minx ; x <= pl->maxx ; x++)
+                        {
+                            dc_yl = pl->top[x];
+                            dc_yh = pl->bottom[x];
+
+                            if (dc_yl <= dc_yh)
+                            {
+                                angle = (viewangle + xtoviewangle[x])>>ANGLETOSKYSHIFT;
+                                dc_x = x;
+                                dc_source = R_GetColumn(skytexture, angle);
+                                colfunc ();
+                                I_FinishUpdate();
+                            }
+                        }
+                        continue;
+                    }
+
+                    // regular flat
+                    lumpnum = firstflat + flattranslation[pl->picnum];
+                    ds_source = W_CacheLumpNum(lumpnum, PU_STATIC);
+
+                    planeheight = abs(pl->height-viewz);
+                    light = (pl->lightlevel >> LIGHTSEGSHIFT)+extralight;
+
+                    if (light >= LIGHTLEVELS)
+                        light = LIGHTLEVELS-1;
+
+                    if (light < 0)
+                        light = 0;
+
+                    planezlight = zlight[light];
+
+                    pl->top[pl->maxx+1] = 0xff;
+                    pl->top[pl->minx-1] = 0xff;
+
+                    stop = pl->maxx + 1;
+
+                    for (x=pl->minx ; x<= stop ; x++)
+                    {
+                        R_MakeSpansSlow(x,pl->top[x-1],
+                                    pl->bottom[x-1],
+                                    pl->top[x],
+                                    pl->bottom[x]);
+                    }
+
+                    W_ReleaseLumpNum(lumpnum);
+                }
+}
